@@ -1,0 +1,12 @@
+python-dotenv
+requests
+langchain
+langchain-core
+langchain-openai
+langchain-ollama
+langchain-community
+fastapi
+uvicorn
+pydantic
+
+langchain-tavily
