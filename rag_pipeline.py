@@ -3,7 +3,7 @@ from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import ChatOllama
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -12,6 +12,7 @@ load_dotenv()
 
 
 embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+# embedding_model = OllamaEmbeddings(model="nomic-embed-text")
 #pip install langchain-huggingface
 # embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 text_splitter = RecursiveCharacterTextSplitter(

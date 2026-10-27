@@ -1,6 +1,7 @@
 import os
 
 from dotenv import load_dotenv
+from fastapi import FastAPI
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.tools import tool
@@ -14,6 +15,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pinecone import Pinecone, ServerlessSpec
+from pydantic.v1 import BaseModel
 
 load_dotenv()
 embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
@@ -113,18 +115,80 @@ def approve_and_continue(thread_id: str, decision: str):
         print(str(e))
 
 
-while True:
-    user_query = input("Enter your question : ")
-    config = {"configurable" : {"thread_id" : "thread_01"}}
+# while True:
+#     user_query = input("Enter your question : ")
+#     config = {"configurable" : {"thread_id" : "thread_01"}}
+#
+#     result = agent.invoke({"messages":
+#                                [{"role": "user", "content": user_query}]
+#                            },
+#                           config=config)
+#     if "__interrupt__" in result:
+#         print("Agent is Interrupted on write to file and waiting on human approval(approve/reject) : ")
+#         decision = input("Enter your decision: ")
+#         response = approve_and_continue("thread_01", decision)
+#         print(response)
+#
+#     print(result)
 
-    result = agent.invoke({"messages":
-                               [{"role": "user", "content": user_query}]
-                           },
-                          config=config)
-    if "__interrupt__" in result:
-        print("Agent is Interrupted on write to file and waiting on human approval(approve/reject) : ")
-        decision = input("Enter your decision: ")
-        response = approve_and_continue("thread_01", decision)
-        print(response)
+# =========================================
+#             Schemas
+# =========================================
 
-    print(result)
+class QueryRequest(BaseModel):
+    user_id : str
+    question : str
+
+class QueryResponse(BaseModel):
+    question: str
+    answer : str
+    user_id : str
+    message : str
+    status : str
+
+class ApproveRequest(BaseModel):
+    user_id : str
+    decision : str
+
+
+app = FastAPI(title="HR Assistant RAG Agent")
+
+@app.post("/approve")
+def human_approval_requests(request : ApproveRequest):
+    config = {"configurable" : {"thread_id" : request.user_id}}
+
+    result = agent.invoke(
+        Command(resume={"decisions" :[{"type" : request.decision}]}),
+        config=config
+    )
+
+    answer = result["messages"][-1].content if result.got("messages") else "No Answer"
+
+    return answer
+
+
+@app.post("/query", response_model=QueryResponse)
+def query(request:QueryRequest):
+    config = {"configurable" : {"thread_id" : request.user_id}}
+    resp = agent.invoke({"messages": [{"role": "user",
+                                       "content" : request.question}]},
+                        config=config)
+
+    if '__interrupt__' in resp:
+        return QueryResponse(
+            question= request.question,
+            answer="No Answer",
+            user_id= request.user_id,
+            message = "Write to file tool is pending human approval",
+            status="Interrupted"
+        )
+
+    return QueryResponse(
+        question=request.question,
+        answer=resp["messages"][-1].content,
+        user_id=request.user_id,
+        message="Success",
+        status="Success"
+    )
+
+
