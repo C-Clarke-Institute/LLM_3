@@ -10,3 +10,4 @@ uvicorn
 pydantic
 
 langchain-tavily
+langchain-text-splitters
