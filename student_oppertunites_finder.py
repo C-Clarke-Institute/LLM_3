@@ -201,4 +201,5 @@ def validate_sources(response : OpportunitySearchResponse, searched_urls : set[s
             opportunity.confidence = "low"
 
     return response
+.
 

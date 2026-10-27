@@ -2,6 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.tools import tool
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -10,51 +11,20 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_pinecone import PineconeVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
-
-
-
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-
-pc.create_index(
-        name="hrdocumentsv3",
-        vector_type="dense",
-        dimension=1536,
-        metric="cosine",
-        spec=ServerlessSpec(
-            cloud="aws",
-            region="us-east-1"
-        ),
-        deletion_protection="disabled",
-        tags={
-            "environment": "development"
-        }
-    )
 embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
-# pip install langchain-huggingface
-# embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=200,
-    add_start_index=True
-)
-loader = PyPDFLoader("hrdocument.pdf", mode="page")
-all_splits = text_splitter.split_documents(loader.load())
 vector_store = PineconeVectorStore(
-    index_name="hrdocumentsv2",
+    index_name="hrdocumentsv3",
     embedding=embedding_model,
     namespace="hr-document"
 )
 
-# To get the unique host for an index,
-# see https://docs.pinecone.io/guides/manage-data/target-an-index
-# vector_store.add_documents(documents=all_splits)
-
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 ollama_model = ChatOllama(model="llama3.2:latest")
-
 
 def enhance_query_with_llm(user_query: str) -> str:
     """enhance user query with llm for better semantic search"""
@@ -89,6 +59,23 @@ def retrieve_context(query: str, num_results: int = 3) -> str:
     print(f"Retrieved Results from vector store - {results}")
     return results
 
+@tool
+def write_results_to_file(content: str, filename: str = "query_results.txt"):
+    """
+    write query results to a text file for persistence storage
+
+    :param content: The result content to write
+    :param filename: Target filename (default: query_results.txt)
+    :return: Completion Message
+    """
+
+    try:
+
+        with open(filename, "a") as f:
+            f.write(content)
+        return f"Successfully wrote {len(content)} characters"
+    except Exception as e:
+        return f"Error Writing -  {str(e)}"
 
 system_prompt = """
 You are an HR Assistant with access to tools:
@@ -100,10 +87,44 @@ If you cant find the answer from the retrieve context say so, do not invent answ
 """
 agent = create_agent(
     model=llm,
-    tools=[retrieve_context],
-    system_prompt=system_prompt
+    tools=[retrieve_context, write_results_to_file],
+    system_prompt=system_prompt,
+    middleware=[HumanInTheLoopMiddleware(
+        interrupt_on={
+            "retrieve_context": False,
+            "write_results_to_file": True
+        }
+    )],
+    checkpointer=InMemorySaver()
 )
+def approve_and_continue(thread_id: str, decision: str):
+    try:
+        agent_config = {"configurable" : {"thread_id" : thread_id}}
+        agent_result = agent.invoke(
+            Command(resume={"decisions": [{"type": decision}]}),
+            config=agent_config
+        )
+        if "messages" in agent_result:
+            return agent_result["messages"][-1].content
+        else:
+            return "No Result"
 
-user_query = input("Enter your question : ")
-result = agent.invoke({"messages": [{"role": "user", "content": user_query}]})
-print(result)
+    except Exception as e:
+        print(str(e))
+
+
+while True:
+    user_query = input("Enter your question : ")
+    config = {"configurable" : {"thread_id" : "thread_01"}}
+
+    result = agent.invoke({"messages":
+                               [{"role": "user", "content": user_query}]
+                           },
+                          config=config)
+    if "__interrupt__" in result:
+        print("Agent is Interrupted on write to file and waiting on human approval(approve/reject) : ")
+        decision = input("Enter your decision: ")
+        response = approve_and_continue("thread_01", decision)
+        print(response)
+
+    print(result)
